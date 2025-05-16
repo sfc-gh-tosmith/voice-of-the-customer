@@ -118,8 +118,75 @@ INSERT INTO CUSTOMER_INTERACTION_TOPICS (topic, subtopic) VALUES
 SELECT * FROM CUSTOMER_INTERACTION_TOPICS;
 
 
--- To do: Add code for using AI to determine the topics
 
+-- This query translates the transcripts and uses AI to look over a large list of them that are concatenated. The AI_AGG function that is in PrPr right now is purpose built for this kind of query.  
+WITH BaseTranscripts AS (
+  SELECT
+    TRANSCRIPT,
+    voice_of_customer.public.CHECK_LANGUAGE_UDF(TRANSCRIPT) AS original_language
+  FROM voice_of_customer.public.CALL_TRANSCRIPTS
+  WHERE LENGTH(TRANSCRIPT) > 5
+),
+TranslatedTranscripts AS (
+  SELECT
+    TRANSCRIPT,
+    original_language,
+    CASE
+      WHEN original_language = 'en' THEN TRANSCRIPT
+      ELSE snowflake.cortex.complete( -- Could also use CORTEX.TRANSLATE(). Faster, but consumes more credits
+        'mixtral-8x7b',
+        [
+          {
+            'role': 'system',
+            'content': 'Translate the transcript into English, maintaining the structure of the conversation.'
+          },
+          { 'role': 'user', 'content': transcript }
+        ],
+        {}
+      ):choices[0]:messages :: VARCHAR
+    END AS translated_transcript
+  FROM BaseTranscripts
+)
+SELECT
+SNOWFLAKE.CORTEX.COMPLETE('claude-3-5-sonnet',
+    [
+        {
+            'role':'system',
+            'content': 'You are an expert at recognizing patterns in customer support transcripts. You will receive an array of customer support call transcripts. Your job is to analyze the transcripts and come up with 8 topics that encompass what the transcripts are about. Future transcripts will be categorized into the topics that you generate. \n *NOTE* - Each category should be made up of maximum 5 words\n - DO NOT respond with any preamble. Only return 8 categories.'
+        },
+        {
+            'role':'user',
+            'content': (
+                        select array_agg(*)::varchar from (
+                        select translated_transcript from TranslatedTranscripts
+                        SAMPLE(30)
+                        )
+                        )
+        }
+    ],{});
+
+-- Run above query a couple of times to see what the broad patterns are. Then consolidate into a final list. 
+    -- Try 1
+    -- 1. Product Quality Issues
+    -- 2. Damaged Merchandise Returns
+    -- 3. Missing Price Tags
+    -- 4. Shipping and Delivery Problems
+    -- 5. Product Replacement Process
+    -- 6. Color Fading Complaints
+    -- 7. Customer Service Response
+    -- 8. Order Verification Process
+    -- Try 2
+    -- 1. Defective Helmet Buckles
+    -- 2. Broken Jacket Zippers
+    -- 3. Faded Color Issues
+    -- 4. Missing Price Tags
+    -- 5. Product Exchange Process
+    -- 6. Shipping and Delivery
+    -- 7. Quality Control Problems
+    -- 8. Customer Service Response
+
+
+    
 
 ---- 2. Main query for translation, sentiment, and categorization ----
 CREATE OR REPLACE TABLE PROCESSED_CUSTOMER_INTERACTIONS AS
