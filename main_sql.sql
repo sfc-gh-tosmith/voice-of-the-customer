@@ -147,25 +147,18 @@ TranslatedTranscripts AS (
     END AS translated_transcript
   FROM BaseTranscripts
 )
-SELECT
-SNOWFLAKE.CORTEX.COMPLETE('claude-3-5-sonnet',
-    [
-        {
-            'role':'system',
-            'content': 'You are an expert at recognizing patterns in customer support transcripts. You will receive an array of customer support call transcripts. Your job is to analyze the transcripts and come up with 8 topics that encompass what the transcripts are about. Future transcripts will be categorized into the topics that you generate. \n *NOTE* - Each category should be made up of maximum 5 words\n - DO NOT respond with any preamble. Only return 8 categories.'
-        },
-        {
-            'role':'user',
-            'content': (
-                        select array_agg(*)::varchar from (
-                        select translated_transcript from TranslatedTranscripts
-                        SAMPLE(30)
-                        )
-                        )
-        }
-    ],{});
 
--- Run above query a couple of times to see what the broad patterns are. Then consolidate into a final list. 
+SELECT SNOWFLAKE.CORTEX.AI_AGG(
+    translated_transcript,
+    'claude-3-5-sonnet',
+    $$You are an expert at recognizing patterns in customer support transcripts. You will receive a set of customer support call transcripts. Your job is to analyze them and come up with 8 topics that encompass what the transcripts are about. Future transcripts will be categorized into the topics that you generate.
+*NOTE* - Each category should be made up of a maximum of 5 words.
+- DO NOT respond with any preamble. Only return 8 categories.$$
+)
+FROM TranslatedTranscripts SAMPLE(30);
+
+
+-- Run the above query a couple of times to see what the broad patterns are. Then consolidate into a final list. 
     -- Try 1
     -- 1. Product Quality Issues
     -- 2. Damaged Merchandise Returns
