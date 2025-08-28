@@ -1,5 +1,5 @@
 ---- Voice of the Customer ----
--- Voice of the Customer is a Framework created by Snowflake’s Solution Innovation Team (SIT). This solution leverages Snowflake’s Cortex Functions, including LLMs and AI SQL, to handle the summarization, categorization, translation, and sentiment analysis of large text objects such as call transcripts, chat histories, and feedback data. The process provides a comprehensive and detailed view of customer interactions, enabling better insights and decision-making.
+-- Voice of the Customer is a Framework created by Snowflake’s Sales Engineer team. This solution leverages Snowflake’s Cortex Functions, including LLMs and AI SQL, to handle the summarization, categorization, translation, and sentiment analysis of large text objects such as call transcripts, chat histories, and feedback data. The process provides a comprehensive and detailed view of customer interactions, enabling better insights and decision-making.
 
 -- How can this help your organization?
     -- Financial sector: Quickly detect emerging concerns about specific financial products or services, Identify customer confusion points
@@ -36,7 +36,9 @@ CREATE or REPLACE table CALL_TRANSCRIPTS (
   transcript varchar
 );
 
--- Upload the CSV into the stage
+-- Upload the CSV into the stage in the UI for the demo. This data may already be in a table somewhere as views.
+-- Note that you can also use AI_TRANSCRIBE to transcribe audio files in a stage.
+-- https://docs.snowflake.com/en/user-guide/snowflake-cortex/ai-audio
 
 COPY into CALL_TRANSCRIPTS
   from @call_transcripts_data_stage;
@@ -44,6 +46,7 @@ COPY into CALL_TRANSCRIPTS
 SELECT * FROM CALL_TRANSCRIPTS;
 
 -- 1b. Creating language detection UDF --
+-- This python UDF will detect the language of the transcription
 CREATE OR REPLACE FUNCTION check_language_udf(str_to_check VARCHAR)
 RETURNS VARCHAR
 LANGUAGE PYTHON
@@ -65,6 +68,8 @@ def check_language(str_to_check: str) -> str:
         return 'unknown'
 $$;
 
+-- These queries will dynamically get your primary_topics and secondary_topics dynamically out of the data.
+-- If you want to manually create the table of categories and sub categories you can do so and skip to the main query.
 -- This query translates the transcripts and uses AI to look over a large list of them that are concatenated. The AI_AGG function that is in PrPr right now is purpose built for this kind of query.  
 WITH BaseTranscripts AS (
   SELECT
@@ -98,7 +103,7 @@ SELECT AI_AGG(
     translated_transcript,
     $$You are an expert at recognizing patterns in customer support transcripts. You will receive a set of customer support call transcripts. Your job is to analyze them and come up with all the different products metioned in the calls.Future transcripts will be categorized into the topics that you generate.
 *NOTE* - Each category should be made up of a maximum of 5 words.
-- DO NOT respond with any preamble. Only return 8 categories.$$
+- DO NOT respond with any preamble. Only return 8 categories.$$ -- Note you can adjust the number of categories here
 )
 FROM TranslatedTranscripts;
 
@@ -112,6 +117,8 @@ FROM TranslatedTranscripts;
 -- Home Equity
 -- Account Access
 
+
+-- This function will classify the calls for the primary topic.
 CREATE OR REPLACE TABLE GET_TOPICS_SUBTOPICS AS (
 WITH BaseTranscripts AS (
   SELECT
@@ -151,7 +158,8 @@ AI_CLASSIFY(transcript,
 'Online Banking',
 'Personal Loans',
 'Home Equity',
-'Account Access']):labels AS category_val,
+'Account Access',
+'Other']):labels AS category_val,
 REGEXP_REPLACE(category_val, '[^a-zA-Z]', '') as primary_category
 FROM translatedtranscripts
 );
@@ -159,7 +167,8 @@ FROM translatedtranscripts
 -- Check output
 SELECT * FROM GET_TOPICS_SUBTOPICS; 
 
--- This will get the stratified subcategories for each category
+-- This will get the stratified subcategories for each category. The data will be paritioned by primary category
+-- Then each primary category will get it's individual list of sub categories.
 CREATE OR REPLACE PROCEDURE EXTRACT_SUBCATEGORIES_BY_PRIMARY_CATEGORY(
     TABLE_NAME STRING,
     TRANSCRIPT_COLUMN STRING DEFAULT 'transcript',
@@ -202,7 +211,7 @@ BEGIN
                 '"' || PRIMARY_CATEGORY_COLUMN || '" AS primary_category, ' ||
                 'AI_AGG("' || TRANSCRIPT_COLUMN || '", ' ||
                 '''Based on these customer service transcripts, identify and list the main subcategories or specific types of issues within this category. ' ||
-                'Provide a comma-separated list of 3-7 specific subcategories that represent the most common themes or issue types. ' ||
+                'Provide a comma-separated list of 3-7 specific subcategories that represent the most common themes or issue types. Also include an other category in the list' ||
                 'Focus on actionable, specific subcategories rather than generic ones. ' ||
                 'For example, for banking: "Payment Processing Issues, Account Access Problems, Interest Rate Inquiries, Fee Disputes". ' ||
                 'Return only the comma-separated list without explanation.''' ||
@@ -241,10 +250,11 @@ BEGIN
 END;
 $$;
 
--- call sproc
+-- call sproc to get the list of sub topics
 CALL EXTRACT_SUBCATEGORIES_BY_PRIMARY_CATEGORY('GET_TOPICS_SUBTOPICS', 'TRANSCRIPT', 'PRIMARY_CATEGORY');
 
--- write output to a table
+-- The output will be a table of the primary_topics and the related sub_topic for each primary.
+-- If you want you can manually create this table if you know your primary topics and sub topics you want to classify as.
 CREATE OR REPLACE TABLE CUSTOMER_INTERACTION_TOPICS AS
     SELECT * FROM TABLE(RESULT_SCAN('01bea820-0e11-5c19-0000-41590b96c29a'));
 
