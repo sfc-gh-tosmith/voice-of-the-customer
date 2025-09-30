@@ -1,5 +1,20 @@
+-- TSmith 9/12/25. This is where the processing for Voice of the Customer really happens
+
+select * from bank_reviews_to_process;
+select * from customer_support_tickets_to_process;
+
+select *,
+AI_CLASSIFY(transcript_text, 
+    ['Wait time inside branch',
+    'Wait time in drive thru', 
+    'Inexperienced or unprofessional teller', 
+    'Inexperienced or unprofessional banker/advisor', 
+    'Poorly maintained facility', 
+    'Problem accessing security deposit box']):labels[0] as review_category
+from voice_of_customer.public.bank_reviews_to_process;
+
 ---- Voice of the Customer ----
--- Voice of the Customer is a Framework created by Snowflake’s Sales Engineer team. This solution leverages Snowflake’s Cortex Functions, including LLMs and AI SQL, to handle the summarization, categorization, translation, and sentiment analysis of large text objects such as call transcripts, chat histories, and feedback data. The process provides a comprehensive and detailed view of customer interactions, enabling better insights and decision-making.
+-- Voice of the Customer is a Framework created by Snowflake’s Sales Engineer team. This solution leverages Snowflake’s Cortex Functions, including LLMs and AISQL, to handle the categorization, translation, summarization and sentiment analysis of large text objects such as call transcripts, chat histories, and feedback data. The process provides a comprehensive and detailed view of customer interactions, enabling better insights and decision-making.
 
 -- How can this help your organization?
     -- Financial sector: Quickly detect emerging concerns about specific financial products or services, Identify customer confusion points
@@ -17,33 +32,8 @@
 
 -- For the main example query to work, each customer interaction record should have the full transcript in a single text body. The individuals/actors should be defined in the transcript. For example "Customer: Good morning Agent: Hello, how can I help you?". The transcript does not need to be in English because we handle translation.
 
--- 1a. Creating example database and example data tables --
-CREATE OR REPLACE DATABASE VOICE_OF_CUSTOMER;
+drop table call_transcripts;
 
-CREATE OR REPLACE SCHEMA VOICE_OF_CUSTOMER.DEMO;
-
-
-
-CREATE or REPLACE file format csvformat
-  SKIP_HEADER = 1
-  FIELD_OPTIONALLY_ENCLOSED_BY = '"'
-  type = 'CSV';
-
-CREATE or REPLACE stage call_transcripts_data_stage
-  file_format = csvformat;
-
-CREATE or REPLACE table CALL_TRANSCRIPTS ( 
-  transcript varchar
-);
-
--- Upload the CSV into the stage in the UI for the demo. This data may already be in a table somewhere as views.
--- Note that you can also use AI_TRANSCRIBE to transcribe audio files in a stage.
--- https://docs.snowflake.com/en/user-guide/snowflake-cortex/ai-audio
-
-COPY into CALL_TRANSCRIPTS
-  from @call_transcripts_data_stage;
-
-SELECT * FROM CALL_TRANSCRIPTS;
 
 -- 1b. Creating language detection UDF --
 -- This python UDF will detect the language of the transcription
@@ -68,98 +58,97 @@ def check_language(str_to_check: str) -> str:
         return 'unknown'
 $$;
 
+
+
+WITH BaseTranscripts AS (
+  SELECT
+    TRANSCRIPT_TEXT,
+    voice_of_customer.public.CHECK_LANGUAGE_UDF(TRANSCRIPT_TEXT) AS original_language
+  FROM bank_reviews_to_process
+  WHERE LENGTH(TRANSCRIPT_TEXT) > 5
+)
+  SELECT
+    TRANSCRIPT_TEXT,
+    original_language,
+    CASE
+      WHEN original_language = 'en' THEN TRANSCRIPT_TEXT
+      ELSE snowflake.cortex.translate(TRANSCRIPT_TEXT,original_language,'en')
+    END AS translated_transcript
+  FROM BaseTranscripts;
+
+
 -- These queries will dynamically get your primary_topics and secondary_topics dynamically out of the data.
 -- If you want to manually create the table of categories and sub categories you can do so and skip to the main query.
 -- This query translates the transcripts and uses AI to look over a large list of them that are concatenated. The AI_AGG function that is in PrPr right now is purpose built for this kind of query.  
 WITH BaseTranscripts AS (
   SELECT
-    TRANSCRIPT,
-    voice_of_customer.DEMO.CHECK_LANGUAGE_UDF(TRANSCRIPT) AS original_language
-  FROM voice_of_customer.DEMO.CALL_TRANSCRIPTS
-  WHERE LENGTH(TRANSCRIPT) > 5
+    TRANSCRIPT_TEXT,
+    voice_of_customer.public.CHECK_LANGUAGE_UDF(TRANSCRIPT_TEXT) AS original_language
+  FROM voice_of_customer.public.bank_reviews_to_process
+  WHERE LENGTH(TRANSCRIPT_TEXT) > 5
 ),
 TranslatedTranscripts AS (
   SELECT
-    TRANSCRIPT,
+    TRANSCRIPT_TEXT,
     original_language,
     CASE
-      WHEN original_language = 'en' THEN TRANSCRIPT
-      ELSE snowflake.cortex.complete( -- Could also use CORTEX.TRANSLATE(). Faster, but consumes more credits
-        'mixtral-8x7b',
-        [
-          {
-            'role': 'system',
-            'content': 'Translate the transcript into English, maintaining the structure of the conversation.'
-          },
-          { 'role': 'user', 'content': transcript }
-        ],
-        {}
-      ):choices[0]:messages :: VARCHAR
+      WHEN original_language = 'en' THEN TRANSCRIPT_TEXT
+      ELSE snowflake.cortex.translate(TRANSCRIPT_TEXT,original_language,'en')
     END AS translated_transcript
   FROM BaseTranscripts
 )
-
 SELECT AI_AGG(
     translated_transcript,
-    $$You are an expert at recognizing patterns in customer support transcripts. You will receive a set of customer support call transcripts. Your job is to analyze them and come up with all the different products metioned in the calls.Future transcripts will be categorized into the topics that you generate.
-*NOTE* - Each category should be made up of a maximum of 5 words.
-- DO NOT respond with any preamble. Only return 8 categories.$$ -- Note you can adjust the number of categories here
+    'You are an expert at recognizing patterns in customer reviews. You will receive a set of customer reviewss. Your job is to analyze them and come up with 8 common categories that are mentioned in the reviews. Future reviews will be categorized into the topics that you generate.
+*NOTE* 
+- Each category should be made up of a maximum of 5 words.
+- DO NOT respond with any preamble. Only return 8 categories.' -- Note you can adjust the number of categories here
 )
 FROM TranslatedTranscripts;
 
 --- Output, copied into array below
--- Mortgages
--- Auto Loans
--- Credit Cards
--- Debit Cards
--- Online Banking
--- Personal Loans
--- Home Equity
--- Account Access
+/*
+Staff Professionalism
+Branch Cleanliness
+Waiting Time
+Customer Service
+Facility Maintenance
+Transaction Efficiency
+Security Measures
+Accessibility
+*/
 
 
 -- This function will classify the calls for the primary topic.
 CREATE OR REPLACE TABLE GET_TOPICS_SUBTOPICS AS (
 WITH BaseTranscripts AS (
   SELECT
-    TRANSCRIPT,
-    voice_of_customer.DEMO.CHECK_LANGUAGE_UDF(TRANSCRIPT) AS original_language
-  FROM voice_of_customer.DEMO.CALL_TRANSCRIPTS
-  WHERE LENGTH(TRANSCRIPT) > 5
+    TRANSCRIPT_TEXT,
+    voice_of_customer.public.CHECK_LANGUAGE_UDF(TRANSCRIPT_TEXT) AS original_language
+  FROM voice_of_customer.public.bank_reviews_to_process
+  WHERE LENGTH(TRANSCRIPT_TEXT) > 5
 ),
 TranslatedTranscripts AS (
   SELECT
-    TRANSCRIPT,
+    TRANSCRIPT_TEXT,
     original_language,
     CASE
-      WHEN original_language = 'en' THEN TRANSCRIPT
-      ELSE snowflake.cortex.complete( -- Could also use CORTEX.TRANSLATE(). Faster, but consumes more credits
-        'mixtral-8x7b',
-        [
-          {
-            'role': 'system',
-            'content': 'Translate the transcript into English, maintaining the structure of the conversation.'
-          },
-          { 'role': 'user', 'content': transcript }
-        ],
-        {}
-      ):choices[0]:messages :: VARCHAR
+      WHEN original_language = 'en' THEN TRANSCRIPT_TEXT
+      ELSE snowflake.cortex.translate(TRANSCRIPT_TEXT,original_language,'en')
     END AS translated_transcript
   FROM BaseTranscripts
 )
 SELECT
-transcript,
+transcript_text as original_transcript,
+translated_transcript,
 -- array copied here
-AI_CLASSIFY(transcript, 
-['Mortgages',
-'Auto Loans',
-'Credit Cards',
-'Debit Cards',
-'Online Banking',
-'Personal Loans',
-'Home Equity',
-'Account Access',
-'Other']):labels AS category_val,
+AI_CLASSIFY(TRANSCRIPT_TEXT, 
+['Wait time inside branch',
+'Wait time in drive thru',
+'Inexperienced or unprofessional teller',
+'Inexperienced or unprofessional banker/advisor',
+'Poorly maintained facility',
+'Problem accessing security deposit box']):labels AS category_val,
 REGEXP_REPLACE(category_val, '[^a-zA-Z]', '') as primary_category
 FROM translatedtranscripts
 );
@@ -171,7 +160,7 @@ SELECT * FROM GET_TOPICS_SUBTOPICS;
 -- Then each primary category will get it's individual list of sub categories.
 CREATE OR REPLACE PROCEDURE EXTRACT_SUBCATEGORIES_BY_PRIMARY_CATEGORY(
     TABLE_NAME STRING,
-    TRANSCRIPT_COLUMN STRING DEFAULT 'transcript',
+    TRANSCRIPT_COLUMN STRING DEFAULT 'transcript_text',
     PRIMARY_CATEGORY_COLUMN STRING DEFAULT 'primary_category'
 )
 RETURNS TABLE (
@@ -251,94 +240,119 @@ END;
 $$;
 
 -- call sproc to get the list of sub topics
-CALL EXTRACT_SUBCATEGORIES_BY_PRIMARY_CATEGORY('GET_TOPICS_SUBTOPICS', 'TRANSCRIPT', 'PRIMARY_CATEGORY');
+CALL EXTRACT_SUBCATEGORIES_BY_PRIMARY_CATEGORY('GET_TOPICS_SUBTOPICS', 'TRANSLATED_TRANSCRIPT', 'PRIMARY_CATEGORY');
 
 -- The output will be a table of the primary_topics and the related sub_topic for each primary.
 -- If you want you can manually create this table if you know your primary topics and sub topics you want to classify as.
 CREATE OR REPLACE TABLE CUSTOMER_INTERACTION_TOPICS AS
-    SELECT * FROM TABLE(RESULT_SCAN('01bea820-0e11-5c19-0000-41590b96c29a'));
+    SELECT * FROM TABLE(RESULT_SCAN('01bf1201-0000-32fb-0007-258b0062d08a'));
 
 SELECT * FROM CUSTOMER_INTERACTION_TOPICS;
 
 ---- 2. Main query for translation, sentiment, and categorization ----
-CREATE OR REPLACE TABLE PROCESSED_CUSTOMER_INTERACTIONS AS
+CREATE OR REPLACE TABLE PROCESSED_BANK_REVIEWS AS
 WITH BaseTranscripts AS (
   SELECT
-    TRANSCRIPT,
-    voice_of_customer.DEMO.CHECK_LANGUAGE_UDF(TRANSCRIPT) AS original_language
-  FROM voice_of_customer.DEMO.CALL_TRANSCRIPTS
-  WHERE LENGTH(TRANSCRIPT) > 5
+    *,
+    voice_of_customer.public.CHECK_LANGUAGE_UDF(transcript_text) AS original_language
+  FROM voice_of_customer.public.bank_reviews_to_process
+  WHERE LENGTH(TRANSCRIPT_TEXT) > 5
 ),
 TranslatedTranscripts AS (
   SELECT
-    TRANSCRIPT,
-    original_language,
+    *,
     CASE
-      WHEN original_language = 'en' THEN TRANSCRIPT
-      ELSE snowflake.cortex.complete( -- Could also use CORTEX.TRANSLATE(). Faster, but consumes more credits
-        'mixtral-8x7b',
-        [
-          {
-            'role': 'system',
-            'content': 'Translate the transcript into English, maintaining the structure of the conversation.'
-          },
-          { 'role': 'user', 'content': transcript }
-        ],
-        {}
-      ):choices[0]:messages :: VARCHAR
+      WHEN original_language = 'en' THEN transcript_text
+      ELSE snowflake.cortex.translate(TRANSCRIPT_TEXT,'','en') -- Empty string will detect language
     END AS translated_transcript
   FROM BaseTranscripts
 ),
 TopicAnalysis AS (
   SELECT
-    TRANSCRIPT,
-    original_language,
-    translated_transcript,
-    SNOWFLAKE.CORTEX.SENTIMENT(translated_transcript) AS sentiment,
-    SNOWFLAKE.CORTEX.CLASSIFY_TEXT(
+    *,
+
+    -- Sentiment Analysis. Here we detect sentiment for a few aspects that we care about, as well as an overall sentiment number between -1 and 1
+    AI_SENTIMENT(translated_transcript, ['wait time','cleanliness','bank representative', 'accomplished desired outcome']) AS sentiment_obj,
+    sentiment_obj:categories[0].sentiment::VARCHAR as overall_sentiment,
+    sentiment_obj:categories[1].sentiment::VARCHAR as cleanliness_sentiment,
+    sentiment_obj:categories[2].sentiment::VARCHAR as representative_sentiment,
+    sentiment_obj:categories[3].sentiment::VARCHAR as wait_time_sentiment,
+    sentiment_obj:categories[3].sentiment::VARCHAR as desired_outcome_sentiment,
+    snowflake.cortex.sentiment(translated_transcript) as overall_sentiment_number,
+
+    -- Classify into primary category
+   AI_CLASSIFY(
       translated_transcript,
       (
+        -- Create array of possible primary categories
         SELECT
-          ARRAY_AGG(DISTINCT primary_category) AS all_topics_array
+          ARRAY_AGG(DISTINCT primary_category) AS all_category_array
         FROM
           CUSTOMER_INTERACTION_TOPICS
       ),
       {
         'task_description': 'Return a classification of the topic of the customer interaction identified in the transcript' -- This may not be necessary, shown to demonstrate the option
       }
-    ):label::text AS primary_category_fin -- Parse primary topic and cast as string
+    ):labels[0]::text AS primary_category -- Parse primary topic and cast as string
   FROM TranslatedTranscripts
 ),
 SubtopicAnalysis AS (
     SELECT
-        TRANSCRIPT,
-        original_language,
-        translated_transcript,
-        sentiment,
-        primary_category_fin as primary_category,
-        SNOWFLAKE.CORTEX.CLASSIFY_TEXT(
+        * exclude(sentiment_obj),
+
+        -- Classify into secondary category
+        AI_CLASSIFY(
             translated_transcript,
             (
+                -- Create array of possible secondary categories
                 SELECT
-                    ARRAY_AGG(DISTINCT subcategory) AS all_subtopics_array
+                    ARRAY_AGG(DISTINCT subcategory) AS all_subcategory_array
                 FROM
                     CUSTOMER_INTERACTION_TOPICS s
                 WHERE
-                    LOWER(primary_category_fin) = LOWER(primary_category) 
+                    LOWER(primary_category) = LOWER(primary_category) 
             ),
             {
-                'task_description': 'Return a classification of the topic of the customer interaction identified in the transcript'
+                'task_description': 'Return a classification of the topic of the customer interaction identified in the review. If you\'re not sure, select "other"'
             }
-        ):label::text AS secondary_category -- Parse secondary topic and cast as string
+        ):labels[0]::text AS secondary_category -- Parse secondary topic and cast as string
     FROM
         TopicAnalysis
 )
 SELECT
-  *
+  review_date,
+  branch_number,
+  region_number,
+  customer_id,
+  transcript_text as original_review,
+  original_language,
+  translated_transcript as translated_review,
+  overall_sentiment,
+  cleanliness_sentiment,
+  representative_sentiment,
+  wait_time_sentiment,
+  desired_outcome_sentiment,
+  overall_sentiment_number,
+  primary_category,
+  secondary_category  
 FROM
   SubtopicAnalysis;
+  
+select * from customer_interaction_topics;
+SELECT * FROM PROCESSED_BANK_REVIEWS;
 
-SELECT * FROM PROCESSED_CUSTOMER_INTERACTIONS;
+CREATE OR REPLACE CORTEX SEARCH SERVICE review_search_service
+  ON translated_review
+  ATTRIBUTES region_number, branch_number
+  WAREHOUSE = compute_wh
+  TARGET_LAG = '1 day'
+  AS (
+    SELECT
+        *
+    FROM PROCESSED_BANK_REVIEWS
+);
+
+
 
 -- Average sentiment by primary topic
 SELECT ROUND(AVG(sentiment),2) as AVG_SENTIMENT_SCORE, primary_category from processed_customer_interactions
@@ -357,6 +371,9 @@ ORDER BY AVG_SENTIMENT_SCORE DESC;
     -- Call volume per topic or per sentiment type (Positive, Negative, Neutral). Understanding the volume of discussions around specific topics helps optimize operational staffing, prioritize agent training, and identify high-impact areas for process improvements
     -- Average sentiment by language. Highlight a need for enhanced localization or improved communication tactics
     -- Top Primary topics by language. Line above
+
+
+
 
 
 

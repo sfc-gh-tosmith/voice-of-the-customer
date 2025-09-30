@@ -1,3 +1,3 @@
 # voice-of-the-customer
 
-SQL-only query for what is explained in the [Solution Innovation Team Voice of the Customer](https://github.com/Snowflake-Labs/emerging-solutions-toolbox/tree/main/framework-voice-of-the-customer)
+This is the code used in the CAA Webinar "Voice of the Customer with AISQL and Snowflake Intelligence". The code allows you to generate data and process it. 
