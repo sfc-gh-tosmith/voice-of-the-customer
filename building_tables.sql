@@ -49,3 +49,27 @@ SELECT
 FROM VOICE_OF_CUSTOMER.PUBLIC.CUSTOMER_SUPPORT_TRANSCRIPTS_GPT5 t;
 
 select * from customer_support_tickets_to_process;
+
+select  UNIFORM(1, 701, RANDOM()) AS CUSTOMER_ID;
+
+-- Create customer lifetime value table
+CREATE OR REPLACE TABLE customer_lifetime_value as
+with allCustomers as (select customer_id from customer_support_tickets_to_process
+union 
+select customer_id from bank_reviews_to_process)
+select customer_id, UNIFORM(1, 100001, RANDOM()) lifetime_value from allCustomers ;
+
+select * from customer_lifetime_value;
+
+UPDATE customer_lifetime_value 
+SET lifetime_value = UNIFORM(90000, 140000, RANDOM()) 
+WHERE customer_id IN (537, 381, 330, 593);
+
+with allCustomers as (select customer_id, support_ticket_date from customer_support_tickets_to_process
+union all 
+select customer_id, review_date from bank_reviews_to_process)
+select customer_id, count(*) 
+from allCustomers
+group by customer_id
+order by count(*) desc;
+

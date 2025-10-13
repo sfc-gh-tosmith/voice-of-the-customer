@@ -1,0 +1,36 @@
+PRIMARY_CATEGORY,SUBCATEGORY
+Mobile App Issues,Account Access Problems
+Mobile App Issues,Account Summary Loading Issues
+Mobile App Issues,App Crashing Issues
+Mobile App Issues,Cache and Data Issues
+Mobile App Issues,Error Messages
+Mobile App Issues,Internet Connection Issues
+Mobile App Issues,Other
+PDF Generation Issues,App Crashes or Freezes
+PDF Generation Issues,Button Not Responding
+PDF Generation Issues,Error Messages or Alerts
+PDF Generation Issues,Login or Authentication Problems
+PDF Generation Issues,Other
+Passkey Errors,Biometric Authentication Issues
+Passkey Errors,Other
+Passkey Errors,Passkey Authentication Failures
+Passkey Errors,Passkey Not Recognized Errors
+Passkey Errors,Passkey Registration Issues
+Passkey Errors,Passkey Reset and Re-registration Issues
+Passkey Errors,Temporary Access Code Requests
+Duo MFA Issues,Duo App Issues
+Duo MFA Issues,Duo MFA Authentication Errors
+Duo MFA Issues,Internet Connection Issues
+Duo MFA Issues,Notification Issues
+Duo MFA Issues,Other
+Duo MFA Issues,Temporary Code or Passcode Issues
+Duo MFA Issues,Time and Date Settings Issues
+App Crashes,Android Compatibility Issues
+App Crashes,App Crashes After Login
+App Crashes,App Update Issues
+App Crashes,Login Problems
+App Crashes,Other
+App Crashes,iOS Compatibility Issues
+Account Summary Issues,Account Summary Loading Issues
+Account Summary Issues,App Crashes
+Account Summary Issues,Other
